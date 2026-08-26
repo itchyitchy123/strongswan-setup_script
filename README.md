@@ -19,8 +19,9 @@ sudo ./install-strongswan.sh
 ```
 
 The script shows the generated connection before writing it. Existing config
-files are backed up with a timestamp, and `/etc/ipsec.secrets` is installed with
-mode `0600`.
+files are backed up with a timestamp, `/etc/ipsec.secrets` is installed with
+mode `0600`, and the previous config is restored if validation, restart, or
+connection loading fails.
 
 After setup:
 
@@ -31,8 +32,17 @@ sudo ipsec down my-vpn
 ```
 
 For username/password connections, provide the VPN server's CA certificate when
-prompted. Leaving it blank relies on certificates already present in
-`/etc/ipsec.d/cacerts`; do not disable server certificate verification.
+prompted. The script only allows this prompt to be left blank when certificates
+already exist in `/etc/ipsec.d/cacerts`; do not disable server certificate
+verification.
+
+## Test it
+
+```sh
+shellcheck install-strongswan.sh tests/run.sh
+bash -n install-strongswan.sh tests/run.sh
+bash tests/run.sh
+```
 
 ## Before using it in production
 
@@ -43,3 +53,6 @@ prompted. Leaving it blank relies on certificates already present in
 - On a site-to-site gateway, enable IP forwarding and configure forwarding and
   NAT rules separately; those settings are network-specific and are deliberately
   not changed by this installer.
+- Confirm package and service names for the target distribution. This installer
+  targets the traditional `ipsec.conf`/starter workflow, not a full `swanctl`
+  deployment.

@@ -7,6 +7,13 @@ umask 077
 readonly IPSEC_CONF=/etc/ipsec.conf
 readonly IPSEC_SECRETS=/etc/ipsec.secrets
 WORK_DIR=''
+BACKUP_CONF=''
+BACKUP_SECRETS=''
+BACKUP_CA_CERT=''
+CA_CERT_TARGET=''
+HAD_IPSEC_CONF=0
+HAD_IPSEC_SECRETS=0
+HAD_CA_CERT=0
 
 cleanup() {
     if [[ -n $WORK_DIR && -d $WORK_DIR && $WORK_DIR == /tmp/tmp.* ]]; then
@@ -82,6 +89,7 @@ validate_name() {
 validate_plain_value() {
     local label=$1 value=$2
     [[ $value != *$'\n'* && $value != *$'\r'* ]] || die "$label contains a newline."
+    [[ $value != *'#'* ]] || die "$label may not contain '#'."
 }
 
 validate_host() {
@@ -90,8 +98,27 @@ validate_host() {
 }
 
 validate_selector() {
-    [[ $2 =~ ^[A-Fa-f0-9.:/,[:space:]-]+$ ]] ||
+    local label=$1 value=$2
+    [[ $value =~ ^[A-Fa-f0-9.:/,[:space:]-]+$ ]] ||
         die "$1 must contain only IP addresses or CIDR ranges separated by commas."
+    if command_exists python3; then
+        python3 - "$label" "$value" <<'PY' || exit 1
+import ipaddress
+import sys
+
+label, raw = sys.argv[1], sys.argv[2]
+parts = [part.strip() for part in raw.split(",")]
+if not parts or any(not part for part in parts):
+    print(f"Error: {label} contains an empty traffic selector.", file=sys.stderr)
+    sys.exit(1)
+for part in parts:
+    try:
+        ipaddress.ip_network(part, strict=False)
+    except ValueError as exc:
+        print(f"Error: {label} contains invalid CIDR selector {part!r}: {exc}", file=sys.stderr)
+        sys.exit(1)
+PY
+    fi
 }
 
 escape_secret() {
@@ -99,6 +126,32 @@ escape_secret() {
     value=${value//\\/\\\\}
     value=${value//\"/\\\"}
     printf '%s' "$value"
+}
+
+is_special_identity() {
+    [[ $1 =~ ^%[A-Za-z0-9_.:-]+$ ]]
+}
+
+render_identity() {
+    local value=$1
+    if is_special_identity "$value"; then
+        printf '%s' "$value"
+    else
+        printf '"%s"' "$(escape_secret "$value")"
+    fi
+}
+
+validate_ca_cert() {
+    local path=$1
+    [[ -f $path ]] || die "CA certificate not found: $path"
+    if command_exists openssl; then
+        openssl x509 -in "$path" -noout >/dev/null 2>&1 ||
+            die "CA certificate is not a parseable X.509 certificate: $path"
+    fi
+}
+
+existing_ca_certs_present() {
+    compgen -G '/etc/ipsec.d/cacerts/*' >/dev/null 2>&1
 }
 
 detect_installer() {
@@ -159,8 +212,12 @@ collect_client_eap() {
     prompt_default LOCAL_TS 'Local traffic selector' '0.0.0.0/0,::/0'
     validate_selector 'Local traffic selector' "$LOCAL_TS"
     CA_CERT=''
-    read -r -p 'CA certificate path (recommended; leave blank to configure later): ' CA_CERT
-    [[ -z $CA_CERT || -f $CA_CERT ]] || die "CA certificate not found: $CA_CERT"
+    if existing_ca_certs_present; then
+        read -r -p 'CA certificate path (leave blank to use existing /etc/ipsec.d/cacerts): ' CA_CERT
+    else
+        prompt_required CA_CERT 'CA certificate path for server certificate validation'
+    fi
+    [[ -z $CA_CERT ]] || validate_ca_cert "$CA_CERT"
 }
 
 collect_client_psk() {
@@ -195,13 +252,17 @@ conn $CONNECTION_NAME
     left=%defaultroute
     leftsourceip=%config
     leftauth=eap-mschapv2
-    leftid="$(escape_secret "$USERNAME")"
+    leftid=$(render_identity "$USERNAME")
     right=$REMOTE_HOST
-    rightid="$(escape_secret "$REMOTE_ID")"
+    rightid=$(render_identity "$REMOTE_ID")
     rightauth=pubkey
     rightsubnet=$LOCAL_TS
-    eap_identity="$(escape_secret "$USERNAME")"
+    eap_identity=$(render_identity "$USERNAME")
+    fragmentation=yes
+    mobike=yes
     dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
     closeaction=restart
 EOF
             ;;
@@ -213,14 +274,18 @@ conn $CONNECTION_NAME
     type=tunnel
     auto=start
     left=%defaultroute
-    leftid="$(escape_secret "$LOCAL_ID")"
+    leftid=$(render_identity "$LOCAL_ID")
     leftauth=psk
     leftsourceip=%config
     right=$REMOTE_HOST
-    rightid="$(escape_secret "$REMOTE_ID")"
+    rightid=$(render_identity "$REMOTE_ID")
     rightauth=psk
     rightsubnet=$LOCAL_TS
+    fragmentation=yes
+    mobike=yes
     dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
     closeaction=restart
 EOF
             ;;
@@ -232,14 +297,18 @@ conn $CONNECTION_NAME
     type=tunnel
     auto=start
     left=%defaultroute
-    leftid="$(escape_secret "$LOCAL_ID")"
+    leftid=$(render_identity "$LOCAL_ID")
     leftsubnet=$LOCAL_SUBNET
     leftauth=psk
     right=$REMOTE_HOST
-    rightid="$(escape_secret "$REMOTE_ID")"
+    rightid=$(render_identity "$REMOTE_ID")
     rightsubnet=$REMOTE_SUBNET
     rightauth=psk
+    fragmentation=yes
+    mobike=no
     dpdaction=restart
+    dpddelay=30s
+    dpdtimeout=120s
     closeaction=restart
 EOF
             ;;
@@ -248,9 +317,9 @@ EOF
 
 render_secret() {
     case $CONNECTION_TYPE in
-        1) printf '"%s" : EAP "%s"\n' "$(escape_secret "$USERNAME")" "$(escape_secret "$PASSWORD")" ;;
-        2|3) printf '"%s" "%s" : PSK "%s"\n' "$(escape_secret "$LOCAL_ID")" \
-            "$(escape_secret "$REMOTE_ID")" "$(escape_secret "$PSK")" ;;
+        1) printf '%s : EAP "%s"\n' "$(render_identity "$USERNAME")" "$(escape_secret "$PASSWORD")" ;;
+        2|3) printf '%s %s : PSK "%s"\n' "$(render_identity "$LOCAL_ID")" \
+            "$(render_identity "$REMOTE_ID")" "$(escape_secret "$PSK")" ;;
     esac
 }
 
@@ -296,31 +365,108 @@ install_configuration() {
     confirm 'Write this configuration?' || die 'Cancelled; no configuration was changed.'
 
     timestamp=$(date +%Y%m%d-%H%M%S)
-    [[ ! -e $IPSEC_CONF ]] || run_as_root cp -a "$IPSEC_CONF" "$IPSEC_CONF.backup-$timestamp"
-    [[ ! -e $IPSEC_SECRETS ]] || run_as_root cp -a "$IPSEC_SECRETS" "$IPSEC_SECRETS.backup-$timestamp"
+    BACKUP_CONF=''
+    BACKUP_SECRETS=''
+    BACKUP_CA_CERT=''
+    CA_CERT_TARGET=''
+    HAD_IPSEC_CONF=0
+    HAD_IPSEC_SECRETS=0
+    HAD_CA_CERT=0
+    if [[ -e $IPSEC_CONF ]]; then
+        HAD_IPSEC_CONF=1
+        BACKUP_CONF=$IPSEC_CONF.backup-$timestamp
+        run_as_root cp -a "$IPSEC_CONF" "$BACKUP_CONF"
+    fi
+    if [[ -e $IPSEC_SECRETS ]]; then
+        HAD_IPSEC_SECRETS=1
+        BACKUP_SECRETS=$IPSEC_SECRETS.backup-$timestamp
+        run_as_root cp -a "$IPSEC_SECRETS" "$BACKUP_SECRETS"
+    fi
     run_as_root install -o root -g root -m 0644 "$new_conf" "$IPSEC_CONF"
     run_as_root install -o root -g root -m 0600 "$new_secrets" "$IPSEC_SECRETS"
 
     if [[ -n ${CA_CERT:-} ]]; then
+        CA_CERT_TARGET=/etc/ipsec.d/cacerts/${CA_CERT##*/}
         run_as_root install -d -o root -g root -m 0755 /etc/ipsec.d/cacerts
-        run_as_root install -o root -g root -m 0644 "$CA_CERT" "/etc/ipsec.d/cacerts/${CA_CERT##*/}"
+        if [[ -e $CA_CERT_TARGET ]]; then
+            HAD_CA_CERT=1
+            BACKUP_CA_CERT=$CA_CERT_TARGET.backup-$timestamp
+            run_as_root cp -a "$CA_CERT_TARGET" "$BACKUP_CA_CERT"
+        fi
+        run_as_root install -o root -g root -m 0644 "$CA_CERT" "$CA_CERT_TARGET"
     fi
 }
 
+restore_backups() {
+    info 'Restoring previous strongSwan configuration'
+    if [[ -n $BACKUP_CONF && -e $BACKUP_CONF ]]; then
+        run_as_root install -o root -g root -m 0644 "$BACKUP_CONF" "$IPSEC_CONF"
+    elif (( HAD_IPSEC_CONF == 0 )); then
+        run_as_root rm -f -- "$IPSEC_CONF"
+    fi
+    if [[ -n $BACKUP_SECRETS && -e $BACKUP_SECRETS ]]; then
+        run_as_root install -o root -g root -m 0600 "$BACKUP_SECRETS" "$IPSEC_SECRETS"
+    elif (( HAD_IPSEC_SECRETS == 0 )); then
+        run_as_root rm -f -- "$IPSEC_SECRETS"
+    fi
+    if [[ -n $CA_CERT_TARGET ]]; then
+        if [[ -n $BACKUP_CA_CERT && -e $BACKUP_CA_CERT ]]; then
+            run_as_root install -o root -g root -m 0644 "$BACKUP_CA_CERT" "$CA_CERT_TARGET"
+        elif (( HAD_CA_CERT == 0 )); then
+            run_as_root rm -f -- "$CA_CERT_TARGET"
+        fi
+    fi
+}
+
+run_or_rollback() {
+    local message=$1
+    shift
+    if ! "$@"; then
+        restore_backups
+        die "$message"
+    fi
+}
+
+validate_installed_configuration() {
+    if command_exists ipsec && run_as_root ipsec --help 2>&1 | grep -Fq checkconfig; then
+        info 'Validating strongSwan configuration'
+        run_as_root ipsec checkconfig
+    fi
+}
+
+detect_systemd_unit() {
+    local unit
+    for unit in strongswan-starter.service strongswan.service ipsec.service; do
+        if run_as_root systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -Fq "$unit"; then
+            printf '%s\n' "$unit"
+            return 0
+        fi
+    done
+    return 1
+}
+
 start_and_check() {
+    local unit
+    run_or_rollback 'Installed strongSwan configuration failed validation; restored previous files.' \
+        validate_installed_configuration
+
     info 'Restarting strongSwan'
-    if command_exists systemctl; then
-        run_as_root systemctl enable --now strongswan-starter 2>/dev/null ||
-            run_as_root systemctl enable --now strongswan
-        run_as_root systemctl restart strongswan-starter 2>/dev/null ||
-            run_as_root systemctl restart strongswan
+    if command_exists systemctl && unit=$(detect_systemd_unit); then
+        run_or_rollback "Failed to enable/start $unit; restored previous files." \
+            run_as_root systemctl enable --now "$unit"
+        run_or_rollback "Failed to restart $unit; restored previous files." \
+            run_as_root systemctl restart "$unit"
+    elif command_exists ipsec; then
+        run_or_rollback 'Failed to restart strongSwan with ipsec; restored previous files.' \
+            run_as_root ipsec restart
     else
-        run_as_root ipsec restart
+        run_or_rollback 'Could not find systemctl unit or ipsec command; restored previous files.' false
     fi
 
     info 'Checking the loaded connection'
     if ! run_as_root ipsec statusall | grep -Fq "$CONNECTION_NAME"; then
-        die "strongSwan started, but '$CONNECTION_NAME' was not loaded. Check the service logs and timestamped backups."
+        restore_backups
+        die "strongSwan started, but '$CONNECTION_NAME' was not loaded. Previous configuration was restored."
     fi
 }
 
