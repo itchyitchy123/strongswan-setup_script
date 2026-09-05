@@ -712,11 +712,15 @@ func refuseModernBackend(r runner) error {
 }
 func preflight(o options, r runner, out io.Writer) error {
 	if strings.ContainsAny(o.gateway, ":") {
-		fmt.Fprintf(out, "Preflight: gateway is an IP literal: %s\n", o.gateway)
+		if o.output == "text" {
+			fmt.Fprintf(out, "Preflight: gateway is an IP literal: %s\n", o.gateway)
+		}
 	} else if ips, err := net.LookupHost(o.gateway); err != nil || len(ips) == 0 {
 		return fmt.Errorf("gateway DNS lookup failed for %s: %w", o.gateway, err)
 	} else {
-		fmt.Fprintf(out, "Preflight: %s resolves to %s\n", o.gateway, strings.Join(ips, ", "))
+		if o.output == "text" {
+			fmt.Fprintf(out, "Preflight: %s resolves to %s\n", o.gateway, strings.Join(ips, ", "))
+		}
 	}
 	version, err := r.Run("ipsec", "--version")
 	if err != nil || !strings.Contains(strings.ToLower(string(version)), "strongswan") {
@@ -726,7 +730,9 @@ func preflight(o options, r runner, out io.Writer) error {
 		if route, routeErr := r.Run("ip", "route", "get", o.gateway); routeErr != nil {
 			return fmt.Errorf("no route to VPN gateway %s", o.gateway)
 		} else {
-			fmt.Fprintf(out, "Preflight route: %s\n", strings.TrimSpace(string(route)))
+			if o.output == "text" {
+				fmt.Fprintf(out, "Preflight route: %s\n", strings.TrimSpace(string(route)))
+			}
 		}
 	}
 	if o.profile == string(eap) {
@@ -741,7 +747,9 @@ func preflight(o options, r runner, out io.Writer) error {
 			return errors.New("site-to-site requires net.ipv4.ip_forward=1; enable it explicitly before installation")
 		}
 	}
-	fmt.Fprintln(out, "Preflight: confirm UDP 500/4500, NAT, firewall, routes, system clock, and (for gateways) forwarding separately.")
+	if o.output == "text" {
+		fmt.Fprintln(out, "Preflight: confirm UDP 500/4500, NAT, firewall, routes, system clock, and (for gateways) forwarding separately.")
+	}
 	return nil
 }
 func diagnostics(o options, service string, r runner, out io.Writer) error {

@@ -24,7 +24,10 @@ make build
 sudo install -o root -g root -m 0755 bin/strongswan-setup /usr/local/sbin/strongswan-setup
 ```
 
-The project uses only the Go standard library. CI runs formatting, vetting, and unit tests.
+The project uses only the Go standard library. CI runs formatting, vetting, unit
+tests, and a Debian container smoke test against a real strongSwan starter
+daemon. See [operations documentation](docs/OPERATIONS.md) for the complete
+command reference and recovery procedures.
 
 ## Automation and lifecycle
 
@@ -91,7 +94,7 @@ It intentionally does **not** create firewall, NAT, forwarding, DNS, or route po
 - Site-to-site gateways have forwarding enabled and explicit firewall rules.
 - The approved IKE/ESP suites match the peer. Override `--ike` and `--esp` only with organization-approved proposals.
 
-The program validates with `ipsec checkconfig`, restarts the selected legacy service, confirms the connection is loaded, and restores both files and the prior daemon state on failure. Backups are stored in `/var/backups/strongswan-setup` with mode `0700`; only the newest ten transactions are retained. The transaction lock uses an advisory kernel lock, so it is released automatically after a crash.
+The program validates with `ipsec checkconfig`, restarts the selected legacy service, confirms the connection is loaded, and restores both files and the prior daemon state on failure. Backups are stored in `/var/backups/strongswan-setup` with mode `0700`; only the newest ten transactions are retained. The transaction lock uses an advisory kernel lock, so it is released automatically after a crash. Backup files contain previous secrets and must be protected accordingly.
 
 ## Scope and limitations
 

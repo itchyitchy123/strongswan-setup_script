@@ -11,9 +11,14 @@ Run the full local check suite before opening a pull request:
 make check
 ```
 
-The tests are intentionally local-only. They validate rendering, marker
-integrity, atomic file restore, and rollback behavior without installing
-packages, writing `/etc`, or restarting a real strongSwan daemon.
+`make check` is local-only. It validates rendering, marker integrity, atomic
+file restore, rollback behavior, JSON automation input, and preflight checks
+without installing packages, writing `/etc`, or restarting a real daemon.
+
+`make integration` builds a Debian container that installs strongSwan starter,
+applies a PSK client connection, validates it with `ipsec`, and removes it.
+It requires Docker and `NET_ADMIN`; CI runs this target. Run it before changing
+rendered configuration, service handling, package behavior, or transactions.
 
 ## Pull Requests
 

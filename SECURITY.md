@@ -19,6 +19,9 @@ advisories when available, or contact the repository owner directly.
 - Keep `/etc/ipsec.secrets` readable only by root.
 - Use `--psk-file` or `--password-file` with a mode-`0600` secret file for
   automation; do not put credentials in command lines, CI logs, or shell history.
+- Transaction backups under `/var/backups/strongswan-setup` contain prior
+  secrets. Keep the directory mode `0700`, do not export it in support bundles,
+  and delete backups only through an approved retention process.
 
 ## Operational Expectations
 
