@@ -11,8 +11,9 @@ Run the full local check suite before opening a pull request:
 make check
 ```
 
-The tests are intentionally local-only. They validate rendering and helper
-behavior without installing packages, writing `/etc`, or restarting strongSwan.
+The tests are intentionally local-only. They validate rendering, marker
+integrity, atomic file restore, and rollback behavior without installing
+packages, writing `/etc`, or restarting a real strongSwan daemon.
 
 ## Pull Requests
 

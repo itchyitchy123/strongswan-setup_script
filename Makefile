@@ -1,14 +1,15 @@
 SHELL := /bin/bash
 
-.PHONY: check lint test syntax
+.PHONY: check lint test build
 
-check: lint syntax test
+check: lint test
 
 lint:
-	shellcheck install-strongswan.sh tests/run.sh
-
-syntax:
-	bash -n install-strongswan.sh tests/run.sh
+	gofmt -d main.go main_test.go | (! grep .)
+	CGO_ENABLED=0 go vet -p 1 ./...
 
 test:
-	bash tests/run.sh
+	CGO_ENABLED=0 go test -p 1 ./...
+
+build:
+	CGO_ENABLED=0 go build -o bin/strongswan-setup .

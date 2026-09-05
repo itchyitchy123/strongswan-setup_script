@@ -1,6 +1,6 @@
 # Security Policy
 
-This repository contains an installer that writes VPN configuration and secrets.
+This repository contains a Go installer that writes VPN configuration and secrets.
 Treat all changes as security-sensitive.
 
 ## Reporting Security Issues
@@ -17,6 +17,8 @@ advisories when available, or contact the repository owner directly.
   infrastructure.
 - Use long random PSKs where certificate authentication is not available.
 - Keep `/etc/ipsec.secrets` readable only by root.
+- Use `--psk-file` or `--password-file` with a mode-`0600` secret file for
+  automation; do not put credentials in command lines, CI logs, or shell history.
 
 ## Operational Expectations
 
