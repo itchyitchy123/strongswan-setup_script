@@ -25,3 +25,11 @@ jobs:
 
       - name: Run checks
         run: make check
+
+      - name: Build installer
+        run: make build
+
+      - name: Exercise a real strongSwan starter daemon
+        run: |
+          docker build -f tests/integration/Dockerfile -t strongswan-setup-integration .
+          docker run --rm --cap-add=NET_ADMIN strongswan-setup-integration

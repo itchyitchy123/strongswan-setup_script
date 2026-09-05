@@ -21,6 +21,10 @@ func (r fakeRunner) Run(name string, args ...string) ([]byte, error) {
 	return nil, nil
 }
 
+type runnerFunc func(string, ...string) ([]byte, error)
+
+func (f runnerFunc) Run(name string, args ...string) ([]byte, error) { return f(name, args...) }
+
 func valid() options {
 	return options{profile: string(pskClient), name: "office", gateway: "vpn.example.com", remoteID: "vpn.example.com", localID: "%any", psk: "secret", remoteTS: "10.10.0.0/16", ike: "aes256gcm16-prfsha384-ecp384!", esp: "aes256gcm16-ecp384!", conf: "/tmp/ipsec.conf", secrets: "/tmp/ipsec.secrets"}
 }
@@ -73,6 +77,38 @@ func TestSecretFileMustBePrivate(t *testing.T) {
 	value, err := readSecretFile(path)
 	if err != nil || value != "secret" {
 		t.Fatalf("secret file read failed: %q, %v", value, err)
+	}
+}
+func TestJSONConfigLoadsSecureAutomationValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connection.json")
+	data := []byte(`{"profile":"psk-client","name":"office","gateway":"vpn.example.test","remote_id":"vpn.example.test","remote_ts":"10.2.0.0/16","psk_file":"/run/secrets/office","non_interactive":true}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	o := options{localID: "%any", ike: "aes256gcm16-prfsha384-ecp384!", esp: "aes256gcm16-ecp384!"}
+	if err := loadJSONConfig(&o, path); err != nil {
+		t.Fatal(err)
+	}
+	if o.name != "office" || o.pskFile != "/run/secrets/office" || !o.nonInteractive {
+		t.Fatalf("config was not loaded: %+v", o)
+	}
+}
+func TestSiteToSiteDisablesMobike(t *testing.T) {
+	o := valid()
+	o.profile = string(site)
+	o.localTS = "10.1.0.0/24"
+	o.localID = "office.example.test"
+	conf, _ := render(o)
+	if !strings.Contains(conf, "mobike=no") {
+		t.Fatal("site-to-site unexpectedly enables MOBIKE")
+	}
+}
+func TestPreflightRejectsNonStrongSwanIPsec(t *testing.T) {
+	o := valid()
+	o.gateway = "198.51.100.10"
+	err := preflight(o, runnerFunc(func(name string, args ...string) ([]byte, error) { return []byte("LibreSwan 4"), nil }), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "strongSwan") {
+		t.Fatalf("unexpected preflight result: %v", err)
 	}
 }
 func TestManagedReplacementPreservesOtherConfiguration(t *testing.T) {

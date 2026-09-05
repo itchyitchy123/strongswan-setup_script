@@ -26,6 +26,32 @@ sudo install -o root -g root -m 0755 bin/strongswan-setup /usr/local/sbin/strong
 
 The project uses only the Go standard library. CI runs formatting, vetting, and unit tests.
 
+## Automation and lifecycle
+
+Use `--config connection.json` for configuration management; command-line flags
+override file values. JSON deliberately accepts secret **file paths**, not secret
+values. Add `--output json` for a machine-readable completion result.
+
+```json
+{
+  "profile": "psk-client",
+  "name": "office",
+  "gateway": "vpn.example.net",
+  "remote_id": "vpn.example.net",
+  "remote_ts": "10.20.0.0/16",
+  "psk_file": "/run/secrets/office.psk",
+  "non_interactive": true,
+  "yes": true
+}
+```
+
+Run `--check` with the normal connection inputs to report DNS, route, legacy
+backend, forwarding, reverse-path-filter, and XFRM-interface readiness without
+writing files. Use `--list` to discover managed connections, `--remove --name
+NAME --yes` to remove one transactionally, and `--rollback TRANSACTION --yes`
+to restore a prior transaction. Removal retains copied CA certificates because
+they can be shared by other connections.
+
 ## Safe noninteractive example
 
 Provide secrets through your deployment system's protected mechanism, not a shell history or a process list. `--psk-file` and `--password-file` accept a regular file that is mode `0600` or stricter; one final newline is removed. Omit these flags for hidden interactive entry.
@@ -65,7 +91,7 @@ It intentionally does **not** create firewall, NAT, forwarding, DNS, or route po
 - Site-to-site gateways have forwarding enabled and explicit firewall rules.
 - The approved IKE/ESP suites match the peer. Override `--ike` and `--esp` only with organization-approved proposals.
 
-The program validates with `ipsec checkconfig`, restarts the selected legacy service, confirms the connection is loaded, and restores both files and the prior daemon state on failure. Backups are stored in `/var/backups/strongswan-setup` with mode `0700`; only the newest ten transactions are retained.
+The program validates with `ipsec checkconfig`, restarts the selected legacy service, confirms the connection is loaded, and restores both files and the prior daemon state on failure. Backups are stored in `/var/backups/strongswan-setup` with mode `0700`; only the newest ten transactions are retained. The transaction lock uses an advisory kernel lock, so it is released automatically after a crash.
 
 ## Scope and limitations
 
